@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import types
 from typing import Any, Callable
 
@@ -11,6 +12,18 @@ from ipv8_service import IPv8
 
 _POLL_INTERVAL = 2.0
 
+_logger = logging.getLogger(__name__)
+
+
+class _WarnUnsupportedCurve(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if "UnsupportedAlgorithm" in (record.exc_text or "") or \
+                "UnsupportedAlgorithm" in str(record.getMessage()):
+            _logger.warning("Unsupported algorithm found from a peer key — skipping")
+            return False
+        return True
+
+
 
 class _ManagedCommunity(Community):
     """Generic community used internally by IPv8Client. Not for direct use."""
@@ -20,16 +33,16 @@ class _ManagedCommunity(Community):
     def __init__(self, settings: CommunitySettings) -> None:
         super().__init__(settings)
         self._peer_waiters: list[tuple[bytes, asyncio.Future]] = []
+        self._discovered: dict[bytes, Peer] = {}
 
     def started(self) -> None:
         self.register_task("_poll_peers", self._poll_peers,
                            interval=_POLL_INTERVAL, delay=_POLL_INTERVAL)
 
     async def _poll_peers(self) -> None:
-        if not self._peer_waiters:
-            return
         for peer in self.get_peers():
             key_bin = peer.public_key.key_to_bin()
+            self._discovered[key_bin] = peer
             for pub_key, future in self._peer_waiters:
                 if key_bin == pub_key and not future.done():
                     future.set_result(peer)
@@ -50,6 +63,7 @@ class IPv8Client:
         """Start an IPv8 node joined to community_id, using the curve25519 key at key_path."""
         cls_name = f"_MC_{community_id.hex()[:12]}"
         community_cls = type(cls_name, (_ManagedCommunity,), {"community_id": community_id})
+        logging.getLogger(cls_name).addFilter(_WarnUnsupportedCurve())
 
         builder = ConfigBuilder().clear_keys().clear_overlays()
         builder.add_key("node", "curve25519", key_path)
@@ -92,17 +106,35 @@ class IPv8Client:
 
     async def wait_for_peer(self, public_key: bytes, timeout: float = 120.0) -> Peer:
         """Resolve to the first verified Peer whose public key matches, or raise TimeoutError."""
-        future: asyncio.Future[Peer] = asyncio.get_event_loop().create_future()
+        future: asyncio.Future[Peer] = asyncio.get_running_loop().create_future()
         self._community.add_peer_waiter(public_key, future)
         return await asyncio.wait_for(future, timeout=timeout)
 
-    def send(self, peer: Peer, payload: VariablePayload) -> None:
-        """Send an authenticated payload to peer."""
+    async def discover_peer(self, public_key: bytes, timeout: float = 120.0) -> Peer:
+        """Wait for a peer to be discovered and cache it; return the Peer."""
+        return await self.wait_for_peer(public_key, timeout=timeout)
+
+    async def discover_peers(
+        self, public_keys: list[bytes], timeout: float = 120.0
+    ) -> dict[bytes, Peer]:
+        """Discover multiple peers concurrently; return a pubkey→Peer mapping."""
+        peers = await asyncio.gather(
+            *(self.discover_peer(pk, timeout=timeout) for pk in public_keys)
+        )
+        return dict(zip(public_keys, peers))
+
+    def send(self, peer: "Peer | bytes", payload: VariablePayload) -> None:
+        """Send an authenticated payload to peer. peer may be a Peer or a cached public-key bytes."""
+        if isinstance(peer, bytes):
+            peer = self._community._discovered[peer]
         self._community.ez_send(peer, payload)
 
-    def start_retry_send(self, peer: Peer, payload: VariablePayload,
+    def start_retry_send(self, peer: "Peer | bytes", payload: VariablePayload,
                          done: "asyncio.Future[Any]", interval: float = 10.0) -> None:
         """Send payload immediately and re-send every interval seconds until done resolves."""
+        if isinstance(peer, bytes):
+            peer = self._community._discovered[peer]
+
         def _retry() -> None:
             if done.done():
                 self._community.cancel_pending_task("_retry_send")
