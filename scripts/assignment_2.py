@@ -7,6 +7,7 @@ import sys
 import time
 
 
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from ipv8.keyvault.crypto import default_eccrypto
@@ -16,7 +17,6 @@ from client import IPv8Client
 from protocol_2 import (
     COMMUNITY_ID,
     SERVER_PUBLIC_KEY,
-    SOFI_KEY_PUBLIC_KEY,
     ChallengeRequestPayload,
     ChallengeResponsePayload,
     GroupRegistrationPayload,
@@ -24,6 +24,8 @@ from protocol_2 import (
     PeerSignaturePayload,
     RoundResultPayload,
     SignatureBundlePayload,
+    SignatureRequestPayload,
+    StartPollingPayload,
 )
 
 _REPO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -127,7 +129,7 @@ class Assignment2Executor:
     async def discover_peers(self) -> None:
         """Discover the other 2 group peers and the server on the network (timeout=60s)."""
         remote_keys = [kb for num, kb in self._peer_pub_keys.items() if num != self._peer_me]
-        all_keys = remote_keys + [SERVER_PUBLIC_KEY]
+        all_keys = [SERVER_PUBLIC_KEY] + remote_keys
         _logger.info("Discovering %d peers (timeout=60s)…", len(all_keys))
         print("Discovering peers… (timeout=60s)")
         discovered = await self._client.discover_peers(all_keys, timeout=60.0)
@@ -144,10 +146,7 @@ class Assignment2Executor:
         _logger.info("All peers discovered")
         print("All peers discovered.")
 
-  
-
     def _register_handlers(self) -> None:
-        """Register IPv8 message handlers for the protocol."""
         @self._client.on_message(GroupRegistrationResponsePayload)
         def _on_group_reg_response(peer: Peer, payload: GroupRegistrationResponsePayload) -> None:
             self._handle_group_reg_response(peer, payload)
@@ -155,6 +154,10 @@ class Assignment2Executor:
         @self._client.on_message(ChallengeResponsePayload)
         def _on_challenge_response(peer: Peer, payload: ChallengeResponsePayload) -> None:
             self._handle_challenge_response(peer, payload)
+
+        @self._client.on_message(SignatureRequestPayload)
+        def _on_signature_request(peer: Peer, payload: SignatureRequestPayload) -> None:
+            self._handle_signature_request(peer, payload)
 
         @self._client.on_message(PeerSignaturePayload)
         def _on_peer_signature(peer: Peer, payload: PeerSignaturePayload) -> None:
@@ -164,13 +167,17 @@ class Assignment2Executor:
         def _on_round_result(peer: Peer, payload: RoundResultPayload) -> None:
             self._handle_round_result(peer, payload)
 
+        @self._client.on_message(StartPollingPayload)
+        def _on_start_polling(peer: Peer, payload: StartPollingPayload) -> None:
+            self._handle_start_polling(peer, payload)
+
+    # -------------------------------------------------------------------------
+    # Server message handlers
+    # -------------------------------------------------------------------------
 
     def _handle_group_reg_response(
         self, peer: Peer, payload: GroupRegistrationResponsePayload
     ) -> None:
-        """
-        Handle the server grouip registration response
-        """
         if peer.public_key.key_to_bin() != SERVER_PUBLIC_KEY:
             return
         _logger.info(
@@ -194,7 +201,6 @@ class Assignment2Executor:
     def _handle_challenge_response(
         self, peer: Peer, payload: ChallengeResponsePayload
     ) -> None:
-        """Handle the server's challenge response for a round request."""
         if peer.public_key.key_to_bin() != SERVER_PUBLIC_KEY:
             return
         _logger.debug(
@@ -202,67 +208,124 @@ class Assignment2Executor:
             payload.round_number, payload.deadline, payload.nonce.hex(),
         )
 
+        if payload.round_number != self._peer_me:
+            _logger.warning(
+                "Received challenge for round %d but we are peer %d; ignoring",
+                payload.round_number, self._peer_me,
+            )
+            return
+
+        # Stop polling — we have our challenge.
+        self._client._community.cancel_pending_task("_poll_rounds")
+        _logger.info("Round %d: challenge received, polling stopped", payload.round_number)
+
         self._current_nonce = payload.nonce
         self._current_round = payload.round_number
 
-        if payload.round_number >= self._round_number and payload.round_number != self._peer_me:
-            my_key = self._client._community.my_peer.key
-            sig = default_eccrypto.sign(my_key, payload.nonce)
-            _logger.info(
-                "Round %d: signing nonce and sending to designated peer %d",
-                payload.round_number, payload.round_number,
-            )
-            target_peer = self._peer_objects[payload.round_number]
-            sig_payload = PeerSignaturePayload(
-                nonce=payload.nonce,
-                round_number=payload.round_number,
-                signature=sig,
-            )
-            asyncio.create_task(self._send_sig_with_retries(target_peer, sig_payload))
+        # Sign the nonce ourselves and seed pending_sigs.
+        my_key = self._client._community.my_peer.key
+        my_sig = default_eccrypto.create_signature(my_key, payload.nonce)
+        self._pending_sigs = {self._peer_me: my_sig}
+        _logger.info(
+            "Round %d: signed nonce, forwarding SignatureRequest to peers %s",
+            payload.round_number,
+            [n for n in self._peer_objects if n != self._peer_me],
+        )
 
-        elif payload.round_number == self._peer_me:
-            my_key = self._client._community.my_peer.key
-            my_sig = default_eccrypto.sign(my_key, payload.nonce)
-            self._pending_sigs = {self._peer_me: my_sig}
-            _logger.info(
-                "Round %d: we are the designated submitter; awaiting peer signatures",
-                payload.round_number,
-            )
+        # Forward nonce to every other group peer so they can sign it.
+        sig_req = SignatureRequestPayload(nonce=payload.nonce, round_number=payload.round_number)
+        for num, peer_obj in self._peer_objects.items():
+            if num != self._peer_me:
+                asyncio.create_task(self._send_with_retries(peer_obj, sig_req, label=f"SignatureRequest→peer{num}"))
 
-    async def _send_sig_with_retries(
-        self, target: Peer, payload: PeerSignaturePayload
-    ) -> None:
-        """Send a PeerSignaturePayload to a target peer with retries."""
-        for attempt in range(3):
-            try:
-                self._client.send(target, payload)
-                _logger.debug("Sent PeerSignature attempt %d to %s", attempt + 1, target)
-            except Exception:
-                _logger.exception("Error sending PeerSignature attempt %d", attempt + 1)
-            if attempt < 2:
-                await asyncio.sleep(0.003)
+    def _handle_round_result(self, peer: Peer, payload: RoundResultPayload) -> None:
+        if peer.public_key.key_to_bin() != SERVER_PUBLIC_KEY:
+            return
+        status = "SUCCESS" if payload.success else "FAILED"
+        _logger.info(
+            "RoundResult: %s | round=%d, completed=%d/3 | %s",
+            status, payload.round_number, payload.rounds_completed, payload.message,
+        )
+
+        if not payload.success:
+            return
+
+        self._round_number = payload.rounds_completed
+
+        if payload.rounds_completed >= 3:
+            _logger.info("All 3 rounds completed — protocol done.")
+            self._client._community.cancel_pending_task("_poll_rounds")
+            return
+
+        # Only the peer who just submitted sends the handoff.
+        if payload.round_number != self._peer_me:
+            return
+
+        next_peer_num = (payload.rounds_completed % 3) + 1
+        if next_peer_num in self._peer_objects:
+            _logger.info(
+                "Round %d done; handing off to peer %d (StartPolling round=%d)",
+                payload.rounds_completed, next_peer_num, next_peer_num,
+            )
+            handoff = StartPollingPayload(round_number=next_peer_num)
+            asyncio.create_task(
+                self._send_with_retries(self._peer_objects[next_peer_num], handoff, label=f"StartPolling→peer{next_peer_num}")
+            )
+        else:
+            _logger.warning("Next peer %d not in peer_objects; cannot hand off", next_peer_num)
+
+    # -------------------------------------------------------------------------
+    # Peer-to-peer message handlers
+    # -------------------------------------------------------------------------
+
+    def _handle_signature_request(self, peer: Peer, payload: SignatureRequestPayload) -> None:
+        """Receive a nonce from the round's submitter, sign it, and return the signature."""
+        sender_key = peer.public_key.key_to_bin()
+        sender_num = next(
+            (n for n, k in self._peer_pub_keys.items() if k == sender_key), None
+        )
+        if sender_num is None:
+            _logger.warning("SignatureRequest from unknown peer; ignoring")
+            return
+
+        _logger.info(
+            "Round %d: received SignatureRequest from peer %d, signing nonce",
+            payload.round_number, sender_num,
+        )
+        my_key = self._client._community.my_peer.key
+        sig = default_eccrypto.create_signature(my_key, payload.nonce)
+
+        response = PeerSignaturePayload(
+            nonce=payload.nonce,
+            round_number=payload.round_number,
+            signature=sig,
+        )
+        asyncio.create_task(
+            self._send_with_retries(peer, response, label=f"PeerSignature→peer{sender_num}")
+        )
 
     def _handle_peer_signature(self, peer: Peer, payload: PeerSignaturePayload) -> None:
-        """Handle a PeerSignaturePayload from a peer."""
+        """Collect a peer's signature; submit the bundle once all 3 are in."""
         if self._current_round != self._peer_me:
             return
 
         sender_key = peer.public_key.key_to_bin()
-        sender_num: int | None = None
-        for num, key_bin in self._peer_pub_keys.items():
-            if key_bin == sender_key:
-                sender_num = num
-                break
-
+        sender_num = next(
+            (n for n, k in self._peer_pub_keys.items() if k == sender_key), None
+        )
         if sender_num is None:
-            _logger.warning("Received PeerSignature from unknown peer; ignoring")
+            _logger.warning("PeerSignature from unknown peer; ignoring")
             return
 
-        _logger.debug("Received signature from peer %d for round %d", sender_num, payload.round_number)
+        _logger.debug(
+            "Received signature from peer %d for round %d", sender_num, payload.round_number
+        )
         self._pending_sigs[sender_num] = payload.signature
 
         if len(self._pending_sigs) == 3:
-            _logger.info("All 3 signatures collected; submitting bundle for round %d", self._current_round)
+            _logger.info(
+                "All 3 signatures collected; submitting bundle for round %d", self._current_round
+            )
             bundle = SignatureBundlePayload(
                 group_id=self._group_id,
                 round_number=self._current_round,
@@ -272,23 +335,70 @@ class Assignment2Executor:
             )
             self._client.send(self._server_peer, bundle)
 
-    def _handle_round_result(self, peer: Peer, payload: RoundResultPayload) -> None:
-        """Handle a RoundResultPayload from the server."""
-        if peer.public_key.key_to_bin() != SERVER_PUBLIC_KEY:
-            return
-        status = "SUCCESS" if payload.success else "FAILED"
-        _logger.info(
-            "RoundResult: %s | round=%d, completed=%d/%d | %s",
-            status, payload.round_number, payload.rounds_completed, 3, payload.message,
+    def _handle_start_polling(self, peer: Peer, payload: StartPollingPayload) -> None:
+        """Receive handoff from previous submitter and begin polling for our round."""
+        sender_key = peer.public_key.key_to_bin()
+        sender_num = next(
+            (n for n, k in self._peer_pub_keys.items() if k == sender_key), None
         )
-        if payload.success:
-            self._round_number = payload.rounds_completed
-        if payload.rounds_completed >= 3:
-            _logger.info("All 3 rounds completed — stopping poll task")
-            self._client._community.cancel_pending_task("_poll_rounds")
+
+        if payload.round_number != self._peer_me:
+            _logger.warning(
+                "StartPolling for round %d received but we are peer %d; ignoring",
+                payload.round_number, self._peer_me,
+            )
+            return
+
+        _logger.info(
+            "StartPolling received from peer %s for round %d; starting polling",
+            sender_num, payload.round_number,
+        )
+        self._start_polling_task()
+
+    # -------------------------------------------------------------------------
+    # Polling helpers
+    # -------------------------------------------------------------------------
+
+    def send_round_request(self) -> None:
+        if not self._group_id or self._server_peer is None or self._round_number >= 3:
+            return
+        self._client.send(self._server_peer, ChallengeRequestPayload(group_id=self._group_id))
+
+    def _start_polling_task(self) -> None:
+        _logger.info("Peer %d starting round-request polling (interval=1s)", self._peer_me)
+        self._client._community.register_task(
+            "_poll_rounds", self.send_round_request, interval=1.0, delay=0.0
+        )
+
+    def start_polling(self) -> None:
+        """Called manually by peer 1 to kick off round 1."""
+        if self._server_peer is None:
+            raise ValueError("Cannot start polling: peers not discovered yet.")
+        if not self._group_id:
+            raise ValueError("Cannot start polling: group not registered yet.")
+        if self._peer_me != 1:
+            raise ValueError(
+                f"Only peer 1 starts polling manually (we are peer {self._peer_me}). "
+                "Other peers are triggered automatically via StartPolling."
+            )
+        self._start_polling_task()
+
+    async def _send_with_retries(self, target: Peer, payload, *, label: str, attempts: int = 3) -> None:
+        for i in range(attempts):
+            try:
+                self._client.send(target, payload)
+                _logger.debug("%s: sent (attempt %d)", label, i + 1)
+            except Exception:
+                _logger.exception("%s: error on attempt %d", label, i + 1)
+            if i < attempts - 1:
+                await asyncio.sleep(0.05)
+
+    # -------------------------------------------------------------------------
+    # Group registration
+    # -------------------------------------------------------------------------
 
     async def send_group_registration(self) -> None:
-        """Sends the group registration payload. ORDER: Stefan -> Polly -> Sofi"""
+        """Sends the group registration payload. ORDER: Stefan(1) → Polly(2) → Sofi(3)"""
         loop = asyncio.get_running_loop()
         print("Registering group with server using peers 1, 2, 3 in order.")
         self._reg_future = loop.create_future()
@@ -312,26 +422,16 @@ class Assignment2Executor:
             _logger.error("Timed out waiting for group registration response")
             print("ERROR: timed out waiting for server response.")
 
-    def send_round_request(self) -> None:
-        """Sends a ChallengeRequestPayload to the server to request the next round."""
-        if not self._group_id or self._server_peer is None or self._round_number >= 3:
-            return
-        self._client.send(self._server_peer, ChallengeRequestPayload(group_id=self._group_id))
-
-    def start_polling(self) -> None:
-        """Start the periodic polling of the server for round requests 100HZ."""
-        if self._server_peer is None:
-            raise ValueError("Cannot start polling: peers not discovered yet.")
-        if not self._group_id:
-            raise ValueError("Cannot start polling: group not registered yet.")
-        _logger.info("Starting round-request polling (interval=10ms)")
-        self._client._community.register_task(
-            "_poll_rounds", self.send_round_request, interval=0.01, delay=0.0
-        )
+    # -------------------------------------------------------------------------
+    # CLI
+    # -------------------------------------------------------------------------
 
     async def run_assignment_2_cli(self) -> None:
         loop = asyncio.get_running_loop()
-        print("Assignment 2 CLI ready. Commands: discover | walkto <ip> <port> | register_group | start | exit")
+        print(
+            f"Assignment 2 CLI ready (we are peer {self._peer_me}). "
+            "Commands: discover | walkto <ip> <port> | register_group | start | exit"
+        )
         while True:
             try:
                 line: str = await loop.run_in_executor(None, input, "> ")
@@ -364,7 +464,10 @@ class Assignment2Executor:
                 print("Exiting.")
                 break
             elif cmd:
-                print(f"Unknown command: {cmd!r}. Commands: discover | walkto <ip> <port> | register_group | start | exit")
+                print(
+                    f"Unknown command: {cmd!r}. "
+                    "Commands: discover | walkto <ip> <port> | register_group | start | exit"
+                )
 
 
 async def main() -> None:

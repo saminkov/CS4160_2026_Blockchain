@@ -1,6 +1,6 @@
 from ipv8.messaging.payload_dataclass import VariablePayload
 
-from protocol import COMMUNITY_ID, SERVER_PUBLIC_KEY, SOFI_KEY_PUBLIC_KEY
+from protocol import COMMUNITY_ID, SERVER_PUBLIC_KEY, SOFI_KEY_PUBLIC_KEY, POLLY_KEY_PUBLIC_KEY
 
 __all__ = [
     "COMMUNITY_ID",
@@ -12,6 +12,8 @@ __all__ = [
     "SignatureBundlePayload",
     "RoundResultPayload",
     "PeerSignaturePayload",
+    "SignatureRequestPayload",
+    "StartPollingPayload",
 ]
 
 
@@ -56,3 +58,17 @@ class PeerSignaturePayload(VariablePayload):
     msg_id = 7
     format_list = ["varlenH", "q", "varlenH"]
     names = ["nonce", "round_number", "signature"]
+
+
+class SignatureRequestPayload(VariablePayload):
+    """Submitter → others: forward challenge nonce so they can sign it."""
+    msg_id = 8
+    format_list = ["varlenH", "q"]
+    names = ["nonce", "round_number"]
+
+
+class StartPollingPayload(VariablePayload):
+    """Submitter K → peer (rounds_completed % 3) + 1: hand off polling."""
+    msg_id = 9
+    format_list = ["q"]
+    names = ["round_number"]
