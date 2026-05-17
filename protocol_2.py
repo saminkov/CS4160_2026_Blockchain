@@ -1,6 +1,6 @@
 from ipv8.messaging.payload_dataclass import VariablePayload
 
-from protocol import COMMUNITY_ID, SERVER_PUBLIC_KEY
+from protocol import COMMUNITY_ID, SERVER_PUBLIC_KEY, SOFI_KEY_PUBLIC_KEY
 
 __all__ = [
     "COMMUNITY_ID",

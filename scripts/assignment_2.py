@@ -1,9 +1,11 @@
+import argparse
 import asyncio
 import json
 import logging
 import os
 import sys
 import time
+
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -14,6 +16,7 @@ from client import IPv8Client
 from protocol_2 import (
     COMMUNITY_ID,
     SERVER_PUBLIC_KEY,
+    SOFI_KEY_PUBLIC_KEY,
     ChallengeRequestPayload,
     ChallengeResponsePayload,
     GroupRegistrationPayload,
@@ -72,8 +75,14 @@ class Assignment2Executor:
         self._pending_sigs: dict[int, bytes] = {}
         self._reg_future: asyncio.Future | None = None
 
+    _IDENTITY_KEY_MAP: dict[str, str] = {
+        "me": "my_key.pem",
+        "polly": "polly_key.pem",
+        "sofi": "sofi_key.pem",
+    }
+
     @classmethod
-    async def create(cls) -> "Assignment2Executor":
+    async def create(cls, identity: str = "me") -> "Assignment2Executor":
         _logger.info("Loading peer public keys from %s", _KEYS_DIR)
         peer_pub_keys: dict[int, bytes] = {}
         for num, path in cls._PEERS.items():
@@ -84,8 +93,9 @@ class Assignment2Executor:
             peer_pub_keys[num] = key_bin
             _logger.debug("Loaded peer %d: …%s", num, key_bin.hex()[20:40])
 
-        _logger.info("Starting IPv8 node (community=%s)", COMMUNITY_ID.hex())
-        client = await IPv8Client.build(COMMUNITY_ID, cls._KEY_PEM)
+        key_pem = os.path.join(_KEYS_DIR, cls._IDENTITY_KEY_MAP[identity])
+        _logger.info("Starting IPv8 node (community=%s, identity=%s)", COMMUNITY_ID.hex(), identity)
+        client = await IPv8Client.build(COMMUNITY_ID, key_pem)
 
         my_pub_bin = client._community.my_peer.public_key.key_to_bin()
         peer_me: int | None = None
@@ -118,7 +128,6 @@ class Assignment2Executor:
         """Discover the other 2 group peers and the server on the network (timeout=60s)."""
         remote_keys = [kb for num, kb in self._peer_pub_keys.items() if num != self._peer_me]
         all_keys = remote_keys + [SERVER_PUBLIC_KEY]
-        all_keys = [SERVER_PUBLIC_KEY]
         _logger.info("Discovering %d peers (timeout=60s)…", len(all_keys))
         print("Discovering peers… (timeout=60s)")
         discovered = await self._client.discover_peers(all_keys, timeout=60.0)
@@ -322,19 +331,27 @@ class Assignment2Executor:
 
     async def run_assignment_2_cli(self) -> None:
         loop = asyncio.get_running_loop()
-        print("Assignment 2 CLI ready. Commands: discover | register_group | start | exit")
+        print("Assignment 2 CLI ready. Commands: discover | walkto <ip> <port> | register_group | start | exit")
         while True:
             try:
                 line: str = await loop.run_in_executor(None, input, "> ")
             except EOFError:
                 break
-            cmd = line.strip().lower()
+            parts = line.strip().split()
+            cmd = parts[0].lower() if parts else ""
             if cmd == "discover":
                 try:
                     await self.discover_peers()
                 except Exception as exc:
                     _logger.exception("Peer discovery failed")
                     print(f"ERROR: {exc}")
+            elif cmd == "walkto":
+                if len(parts) != 3:
+                    print("Usage: walkto <ip> <port>")
+                else:
+                    addr = (parts[1], int(parts[2]))
+                    self._client._community.walk_to(addr)
+                    print(f"Sent introduction request to {addr}")
             elif cmd == "register_group":
                 await self.send_group_registration()
             elif cmd == "start":
@@ -347,12 +364,21 @@ class Assignment2Executor:
                 print("Exiting.")
                 break
             elif cmd:
-                print(f"Unknown command: {cmd!r}. Commands: discover | register_group | start | exit")
+                print(f"Unknown command: {cmd!r}. Commands: discover | walkto <ip> <port> | register_group | start | exit")
 
 
 async def main() -> None:
+    parser = argparse.ArgumentParser(description="Assignment 2")
+    parser.add_argument(
+        "--identity",
+        choices=["me", "polly", "sofi"],
+        default="me",
+        help="Which private key to use (default: me)",
+    )
+    args = parser.parse_args()
+
     _setup_logging()
-    executor = await Assignment2Executor.create()
+    executor = await Assignment2Executor.create(identity=args.identity)
     try:
         await executor.run_assignment_2_cli()
     finally:
