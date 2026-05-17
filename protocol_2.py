@@ -14,6 +14,8 @@ __all__ = [
     "PeerSignaturePayload",
     "SignatureRequestPayload",
     "StartPollingPayload",
+    "GroupIdPayload",
+    "GroupIdAckPayload",
 ]
 
 
@@ -72,3 +74,17 @@ class StartPollingPayload(VariablePayload):
     msg_id = 9
     format_list = ["q"]
     names = ["round_number"]
+
+
+class GroupIdPayload(VariablePayload):
+    """Peer 1 → peers 2 & 3: share the registered group_id."""
+    msg_id = 10
+    format_list = ["varlenHutf8"]
+    names = ["group_id"]
+
+
+class GroupIdAckPayload(VariablePayload):
+    """Peers 2 & 3 → peer 1: acknowledge receipt of group_id."""
+    msg_id = 11
+    format_list = ["varlenHutf8"]
+    names = ["group_id"]
