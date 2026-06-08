@@ -10,6 +10,7 @@ from blockchain.core.entities import (
     BlockHeader,
     BlockNode,
     Outpoint,
+    Result,
     Transaction,
     UndoRecord,
 )
@@ -159,3 +160,19 @@ class TestUndoRecord:
         undo = UndoRecord(spent=(utxo,), created=(op,))
         assert undo.spent[0].amount == 50
         assert undo.created[0].index == 0
+
+
+class TestResult:
+    def test_success(self) -> None:
+        result = Result(ok=True, reason="")
+        assert result.ok is True
+        assert result.reason == ""
+
+    def test_failure(self) -> None:
+        result = Result(ok=False, reason="invalid signature")
+        assert result.ok is False
+        assert result.reason == "invalid signature"
+
+    def test_equality(self) -> None:
+        assert Result(ok=True, reason="") == Result(ok=True, reason="")
+        assert Result(ok=False, reason="x") != Result(ok=False, reason="y")

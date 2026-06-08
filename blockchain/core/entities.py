@@ -115,3 +115,10 @@ class UndoRecord:
 
     spent: tuple[UTXO, ...]
     created: tuple[Outpoint, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Result:
+
+    ok: bool
+    reason: str
