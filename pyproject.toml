@@ -1,8 +1,6 @@
 [project]
 name = "cs4160-blockchain"
 version = "0.1.0"
-description = "CS4160 Lab 3 — group PoW blockchain"
-readme = "BLOCKCHAIN_SOFTWARE_ARCHITECTURE.md"
 requires-python = ">=3.12"
 dependencies = [
     "pyipv8>=3.2.0",

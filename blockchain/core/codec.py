@@ -15,7 +15,7 @@ from blockchain.core.entities import (
 
 _HEADER_STRUCT = struct.Struct(">32s32sQIQ")
 _VARLEN_UINT16 = struct.Struct(">H")
-_TX_TIMESTAMP = struct.Struct(">q")
+_TX_TIMESTAMP = struct.Struct(">Q")
 _UINT16 = struct.Struct(">H")
 _UINT32 = struct.Struct(">I")
 _UINT64 = struct.Struct(">Q")
