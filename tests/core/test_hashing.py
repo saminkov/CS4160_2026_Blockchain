@@ -43,7 +43,8 @@ def _header(**kwargs: object) -> BlockHeader:
         "nonce": 0,
     }
     defaults.update(kwargs)
-    return BlockHeader(**defaults)  # type: ignore[arg-type]
+    # type: ignore[arg-type]
+    return BlockHeader(**defaults)
 
 
 class TestTxHash:
@@ -95,3 +96,12 @@ class TestHeaderMiningPrefix:
         header = _header()
         assert header_mining_prefix(header) == pack_header(header)[:76]
         assert len(header_mining_prefix(header)) == 76
+
+
+class TestTxsHashFromDigestsMCDC:
+    """Loop condition: bad digest at index > 0 (index 0 already tested)."""
+
+    def test_rejects_bad_digest_at_second_index(self) -> None:
+        good = b"\x00" * HASH_SIZE
+        with pytest.raises(ValueError, match="tx_hashes\\[1\\]"):
+            txs_hash_from_digests([good, b"\x00" * 31])

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from dataclasses import replace
 
 from blockchain.core.consensus_params import (
     ConsensusParams,
@@ -140,3 +141,48 @@ class TestBuildGenesis:
                 community_id=params.community_id,
                 member_pubkeys=reversed_keys,
             )
+
+class TestConsensusParamsMCDC:
+    """Use dataclasses.replace so we only change one field at a time."""
+
+    def _d(self) -> ConsensusParams:
+        return ConsensusParams.default()
+
+    def test_rejects_negative_difficulty_bits(self) -> None:
+        with pytest.raises(ValueError, match="difficulty_bits"):
+            replace(self._d(), difficulty_bits=-1)
+
+    def test_rejects_difficulty_bits_above_32(self) -> None:
+        with pytest.raises(ValueError, match="difficulty_bits"):
+            replace(self._d(), difficulty_bits=33)
+
+    def test_rejects_zero_coin(self) -> None:
+        with pytest.raises(ValueError, match="coin"):
+            replace(self._d(), coin=0)
+
+    def test_rejects_negative_coin(self) -> None:
+        with pytest.raises(ValueError, match="coin"):
+            replace(self._d(), coin=-1)
+
+    def test_rejects_zero_halving_interval(self) -> None:
+        with pytest.raises(ValueError, match="halving_interval"):
+            replace(self._d(), halving_interval=0)
+
+    def test_rejects_negative_halving_interval(self) -> None:
+        with pytest.raises(ValueError, match="halving_interval"):
+            replace(self._d(), halving_interval=-1)
+
+    def test_rejects_empty_community_id(self) -> None:
+        with pytest.raises(ValueError, match="community_id"):
+            replace(self._d(), community_id=b"")
+
+    def test_rejects_too_few_member_pubkeys(self) -> None:
+        d = self._d()
+        with pytest.raises(ValueError, match="member_pubkeys"):
+            replace(d, member_pubkeys=d.member_pubkeys[:2])
+
+    def test_rejects_too_many_member_pubkeys(self) -> None:
+        d = self._d()
+        extra = tuple(sorted(d.member_pubkeys + (b"\xff" * 74,)))
+        with pytest.raises(ValueError, match="member_pubkeys"):
+            replace(d, member_pubkeys=extra)
