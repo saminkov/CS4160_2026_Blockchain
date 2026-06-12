@@ -28,6 +28,6 @@ class MinerPort(Protocol):
         """Abandon the current search without stopping the worker process."""
         ...
 
-def shutdown(self) -> None:
+    def shutdown(self) -> None:
         """Stop the worker process and release its resources."""
         ...
