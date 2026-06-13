@@ -1,4 +1,15 @@
 keys/
 __pycache__/
 *.pyc
-keys/
+.venv/
+venv/
+*.egg-info/
+.dist/
+build/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+logs/
+.DS_Store
