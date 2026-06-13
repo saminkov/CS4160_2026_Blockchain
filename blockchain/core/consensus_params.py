@@ -29,6 +29,7 @@ DIFFICULTY_BITS = 12
 GENESIS_TIMESTAMP = 1_231_006_505
 GENESIS_NONCE = 2_083_236_893
 COMMUNITY_ID_PREFIX = b"Lab3"
+REGISTRATION_COMMUNITY_ID = b"Lab3Blockchain2026PW"
 GENESIS_HEADLINE = (
     b"The Times 03/Jan/2009 Chancellor on brink of second bailout for banks."
 )
@@ -42,6 +43,7 @@ _MEMBER_PUBKEY_FILES = (
     _KEYS_DIR / "polly_key.pem.pub",
 )
 _GROUP_REGISTRATION_FILE = _KEYS_DIR / "group_registration.json"
+_SERVER_PUBKEY_FILE = _KEYS_DIR / "server_key.pem.pub"
 
 
 @lru_cache(maxsize=1)
@@ -59,6 +61,14 @@ def community_id_from_group_id(group_id: str) -> bytes:
 def load_member_pubkeys() -> tuple[bytes, ...]:
     pubkeys = tuple(sorted(path.read_bytes() for path in _MEMBER_PUBKEY_FILES))
     return pubkeys
+
+
+@lru_cache(maxsize=1)
+def load_server_pubkey() -> bytes:
+    pubkey = _SERVER_PUBKEY_FILE.read_bytes()
+    if not pubkey:
+        raise ValueError("server public key must be non-empty")
+    return pubkey
 
 
 @dataclass(frozen=True, slots=True)
