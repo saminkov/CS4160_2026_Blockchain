@@ -71,5 +71,8 @@ class InMemoryMempool(MempoolPort):
             if tx_hash(tx) not in self._by_hash:
                 self.add(tx, 0)
 
+    def snapshot(self) -> tuple[Transaction, ...]:
+        return tuple(self._by_hash.values())
+
     def __len__(self) -> int:
         return len(self._by_hash)

@@ -40,6 +40,10 @@ class BlockStorePort(Protocol):
         """Record ``block_hash`` as the main-chain block at ``height``."""
         ...
 
+    def remove_main_from(self, height: int) -> None:
+        """Drop main-chain entries at ``height`` and above."""
+        ...
+
     def ancestors(self, block_hash: bytes, max_depth: int | None = None) -> list[BlockNode]:
         """Return nodes from ``block_hash`` toward genesis, inclusive and node-first.
 
@@ -111,6 +115,10 @@ class MempoolPort(Protocol):
 
     def restore(self, txs: Iterable[Transaction]) -> None:
         """Re-add transactions orphaned by a reorg."""
+        ...
+
+    def snapshot(self) -> tuple[Transaction, ...]:
+        """Return all pooled transactions in arbitrary order."""
         ...
 
     def __len__(self) -> int:
