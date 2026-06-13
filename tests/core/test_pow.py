@@ -46,3 +46,22 @@ class TestSearchNonce:
     def test_rejects_bad_prefix_length(self) -> None:
         with pytest.raises(ValueError, match="76 bytes"):
             search_nonce(b"\x00" * 75, difficulty=1, should_abort=lambda: False)
+
+class TestHasLeadingZeroBitsMCDC:
+    """bits < 0 OR bits > 256: only > 256 was tested; add < 0."""
+
+    def test_rejects_negative_bits(self) -> None:
+        with pytest.raises(ValueError, match="bits must be"):
+            has_leading_zero_bits(b"\x00" * _HASH_SIZE, -1)
+
+
+class TestSearchNonceMCDC:
+    """difficulty < 0 OR difficulty > 256: entirely untested."""
+
+    def test_rejects_negative_difficulty(self) -> None:
+        with pytest.raises(ValueError, match="difficulty"):
+            search_nonce(b"\x00" * 76, difficulty=-1, should_abort=lambda: False)
+
+    def test_rejects_difficulty_above_256(self) -> None:
+        with pytest.raises(ValueError, match="difficulty"):
+            search_nonce(b"\x00" * 76, difficulty=257, should_abort=lambda: False)

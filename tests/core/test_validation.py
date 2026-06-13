@@ -23,6 +23,8 @@ from blockchain.core.validation import (
     validate_block_size,
     validate_block_stateless,
     validate_coinbase_structure,
+    validate_header_difficulty,
+    validate_pow,
     validate_txs_hash,
 )
 
@@ -155,3 +157,127 @@ def test_non_genesis_stateless_passes_with_pow_and_signatures() -> None:
     block = Block(header=header, transactions=(coinbase,))
     result = validate_block_stateless(block, height=1, params=params, verify=_always_valid)
     assert result.ok
+
+
+class TestValidatePowMCDC:
+    """validate_pow: `if genesis` True/False and the leading-zero fail branch."""
+
+    def test_genesis_always_passes(self) -> None:
+        header = _header(difficulty=32, nonce=0)  # unsatisfiable PoW
+        assert validate_pow(header, genesis=True).ok
+
+    def test_non_genesis_fails_unsatisfied_pow(self) -> None:
+        header = _header(difficulty=32, nonce=0)
+        assert not validate_pow(header, genesis=False).ok
+
+    def test_non_genesis_passes_satisfied_pow(self) -> None:
+        params = ConsensusParams.default()
+        coinbase = _coinbase_tx(1)
+        draft = _header(txs_hash_value=txs_hash((coinbase,)), difficulty=params.difficulty_bits)
+        nonce = search_nonce(
+            header_mining_prefix(draft), params.difficulty_bits, should_abort=lambda: False
+        )
+        assert nonce is not None
+        header = _header(
+            txs_hash_value=txs_hash((coinbase,)), difficulty=params.difficulty_bits, nonce=nonce
+        )
+        assert validate_pow(header, genesis=False).ok
+
+
+class TestValidateHeaderDifficultyMCDC:
+    def test_matching_difficulty_passes(self) -> None:
+        params = ConsensusParams.default()
+        assert validate_header_difficulty(_header(difficulty=params.difficulty_bits), params).ok
+
+    def test_mismatched_difficulty_fails(self) -> None:
+        params = ConsensusParams.default()
+        assert not validate_header_difficulty(_header(difficulty=params.difficulty_bits + 1), params).ok
+
+
+class TestGenesisSignatureExemptMCDC:
+    """
+    _genesis_signature_exempt has 3 conditions joined with `and`.
+    Existing tests cover T T T (genesis passes) and F * * (height=1 rejects).
+    Missing: T F * (tx_index != 0) and T T F (wrong signature).
+    """
+
+    def test_tx_index_nonzero_not_exempt(self) -> None:
+        """height=0, tx_index=1 — second condition independently causes False."""
+        params = ConsensusParams.default()
+        genesis = params.build_genesis()
+        coinbase0 = genesis.block.transactions[0]
+        # Second tx is a data-carrier (not coinbase) carrying the genesis signature
+        extra = Transaction(
+            sender_key=coinbase0.sender_key,
+            data=b"not-coinbase-data",
+            timestamp=coinbase0.timestamp,
+            signature=params.genesis_coinbase_signature,
+        )
+        txs = (coinbase0, extra)
+        header = BlockHeader(
+            prev_hash=genesis.block.header.prev_hash,
+            txs_hash=txs_hash(txs),
+            timestamp=genesis.block.header.timestamp,
+            difficulty=genesis.block.header.difficulty,
+            nonce=genesis.block.header.nonce,
+        )
+        block = Block(header=header, transactions=txs)
+        # coinbase0 at idx=0 is exempt; extra at idx=1 is not → _always_invalid rejects it
+        result = validate_block_stateless(block, height=0, params=params, verify=_always_invalid)
+        assert not result.ok
+
+    def test_wrong_signature_not_exempt(self) -> None:
+        """height=0, tx_index=0, wrong sig — third condition independently causes False."""
+        params = ConsensusParams.default()
+        genesis = params.build_genesis()
+        coinbase = genesis.block.transactions[0]
+        bad_coinbase = Transaction(
+            sender_key=coinbase.sender_key,
+            data=coinbase.data,
+            timestamp=coinbase.timestamp,
+            signature=b"NOT_GENESIS",
+        )
+        header = BlockHeader(
+            prev_hash=genesis.block.header.prev_hash,
+            txs_hash=txs_hash((bad_coinbase,)),
+            timestamp=genesis.block.header.timestamp,
+            difficulty=genesis.block.header.difficulty,
+            nonce=genesis.block.header.nonce,
+        )
+        block = Block(header=header, transactions=(bad_coinbase,))
+        result = validate_block_stateless(block, height=0, params=params, verify=_always_invalid)
+        assert not result.ok
+
+
+class TestValidateCoinbaseStructureMCDC:
+    def test_non_coinbase_tx_fails(self) -> None:
+        assert not validate_coinbase_structure(_transfer_tx(), block_height=1).ok
+
+    def test_malformed_coinbase_data_fails(self) -> None:
+        bad = Transaction(
+            sender_key=_PUBKEY_A,
+            data=b"CBAS\x00\x00\x00",
+            timestamp=1_700_000_000,
+            signature=b"sig",
+        )
+        assert not validate_coinbase_structure(bad, block_height=1).ok
+
+    def test_valid_coinbase_passes(self) -> None:
+        assert validate_coinbase_structure(_coinbase_tx(1), block_height=1).ok
+
+
+class TestValidateBlockCoinbaseRulesMCDC:
+    def test_empty_block_fails(self) -> None:
+        empty = Block(header=_header(), transactions=())
+        assert not validate_block_coinbase_rules(empty, block_height=1).ok
+
+
+class TestValidateTxsHashMCDC:
+    def test_matching_hash_passes(self) -> None:
+        coinbase = _coinbase_tx(1)
+        assert validate_txs_hash(_block(coinbase)).ok
+
+
+class TestValidateBlockSizeMCDC:
+    def test_small_block_passes(self) -> None:
+        assert validate_block_size(_block(_coinbase_tx(1))).ok

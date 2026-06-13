@@ -87,7 +87,8 @@ class TestTransaction:
     def test_frozen(self) -> None:
         tx = _tx()
         with pytest.raises(AttributeError):
-            tx.timestamp = 0  # type: ignore[misc]
+            # type: ignore[misc]
+            tx.timestamp = 0
 
 
 class TestBlock:
@@ -176,3 +177,59 @@ class TestResult:
     def test_equality(self) -> None:
         assert Result(ok=True, reason="") == Result(ok=True, reason="")
         assert Result(ok=False, reason="x") != Result(ok=False, reason="y")
+
+class TestBlockHeaderMCDC:
+    """_check_uint64 (nonce, timestamp) and _check_uint32 (difficulty) overflow/negative paths."""
+
+    def test_rejects_short_txs_hash(self) -> None:
+        with pytest.raises(ValueError, match="txs_hash"):
+            _header(txs_hash=b"\x00" * 31)
+
+    def test_rejects_negative_difficulty(self) -> None:
+        with pytest.raises(ValueError, match="difficulty"):
+            _header(difficulty=-1)
+
+    def test_rejects_timestamp_overflow(self) -> None:
+        with pytest.raises(ValueError, match="timestamp"):
+            _header(timestamp=0x1_0000_0000_0000_0000)
+
+    def test_rejects_nonce_overflow(self) -> None:
+        with pytest.raises(ValueError, match="nonce"):
+            _header(nonce=0x1_0000_0000_0000_0000)
+
+
+class TestOutpointMCDC:
+    """_check_uint16: negative index (left side of OR not yet tested)."""
+
+    def test_rejects_negative_index(self) -> None:
+        with pytest.raises(ValueError, match="index"):
+            Outpoint(txid=_ZERO_HASH, index=-1)
+
+
+class TestUTXOMCDC:
+    """UTXO.__post_init__ branches not previously exercised."""
+
+    def test_rejects_negative_height_created(self) -> None:
+        op = Outpoint(txid=_ZERO_HASH, index=0)
+        with pytest.raises(ValueError, match="height_created"):
+            UTXO(outpoint=op, recipient_pubkey=_PUBKEY, amount=1, height_created=-1, is_coinbase=False)
+
+    def test_rejects_amount_overflow(self) -> None:
+        op = Outpoint(txid=_ZERO_HASH, index=0)
+        with pytest.raises(ValueError, match="amount"):
+            UTXO(
+                outpoint=op,
+                recipient_pubkey=_PUBKEY,
+                amount=0x1_0000_0000_0000_0000,
+                height_created=0,
+                is_coinbase=False,
+            )
+
+
+class TestBlockNodeMCDC:
+    """BlockNode.height < 0 branch never reached by existing tests (only height=0)."""
+
+    def test_rejects_negative_height(self) -> None:
+        block = Block(header=_header(), transactions=())
+        with pytest.raises(ValueError, match="height"):
+            BlockNode(block=block, block_hash=_ZERO_HASH, height=-1, parent_hash=_ZERO_HASH)

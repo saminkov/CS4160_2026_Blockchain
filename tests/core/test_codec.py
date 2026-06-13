@@ -177,3 +177,104 @@ class TestChunking:
 
     def test_default_chunk_size_positive(self) -> None:
         assert DEFAULT_CHUNK_SIZE > 0
+
+class TestVarlenHMCDC:
+    def test_unpack_truncated_length_prefix(self) -> None:
+        with pytest.raises(ValueError, match="truncated"):
+            unpack_varlen_h(b"\x00")
+
+    def test_unpack_truncated_payload(self) -> None:
+        with pytest.raises(ValueError, match="truncated"):
+            # declares 5 bytes, only 3 available
+            unpack_varlen_h(b"\x00\x05abc")  
+
+
+class TestTransactionMCDC:
+    def test_unpack_tx_truncated_at_timestamp(self) -> None:
+        tx = _tx()
+        wire = pack_tx(tx)
+        key_end = 2 + len(tx.sender_key)
+        data_end = key_end + 2 + len(tx.data)
+        # 3 of 8 timestamp bytes
+        truncated = wire[: data_end + 3] 
+        with pytest.raises(ValueError, match="truncated"):
+            unpack_tx(truncated)
+
+
+class TestTimestampSigningMCDC:
+    def test_negative_timestamp_raises(self) -> None:
+        with pytest.raises(ValueError):
+            pack_timestamp_for_signing(-1)
+
+    def test_overflow_timestamp_raises(self) -> None:
+        with pytest.raises(ValueError):
+            pack_timestamp_for_signing(0x1_0000_0000_0000_0000)
+
+
+class TestTransferDataMCDC:
+    def test_encode_rejects_wrong_txid_length(self) -> None:
+        td = TransferData(
+            inputs=(TransferInput(prev_txid=b"\x00" * 31, output_index=0),),
+            outputs=(TransferOutput(recipient_pubkey=b"pk", amount=1),),
+        )
+        with pytest.raises(ValueError, match="32 bytes"):
+            encode_transfer_data(td)
+
+    def test_encode_rejects_empty_output_pubkey(self) -> None:
+        td = TransferData(
+            inputs=(TransferInput(prev_txid=b"\x00" * 32, output_index=0),),
+            outputs=(TransferOutput(recipient_pubkey=b"", amount=1),),
+        )
+        with pytest.raises(ValueError, match="pubkey"):
+            encode_transfer_data(td)
+
+    def test_decode_rejects_wrong_magic(self) -> None:
+        with pytest.raises(ValueError, match="UTX1"):
+            decode_transfer_data(b"CBAS" + b"\x00" * 10)
+
+    def test_decode_truncated_input(self) -> None:
+        # 1 input declared but only 10 bytes supplied (need 34: 32 txid + 2 index)
+        with pytest.raises(ValueError, match="truncated"):
+            decode_transfer_data(b"UTX1" + b"\x00\x01" + b"\x00" * 10)
+
+
+class TestCoinbaseDataMCDC:
+    def test_encode_rejects_empty_pubkey(self) -> None:
+        cd = CoinbaseData(
+            height=1,
+            outputs=(CoinbaseOutput(recipient_pubkey=b"", amount=1),),
+        )
+        with pytest.raises(ValueError, match="pubkey"):
+            encode_coinbase_data(cd)
+
+    def test_decode_rejects_wrong_magic(self) -> None:
+        with pytest.raises(ValueError, match="CBAS"):
+            decode_coinbase_data(b"UTX1" + b"\x00" * 10)
+
+    def test_decode_truncated_header(self) -> None:
+        # Only 5 bytes after CBAS magic; need 10 (8 height + 2 count)
+        with pytest.raises(ValueError, match="truncated"):
+            decode_coinbase_data(b"CBAS" + b"\x00" * 5)
+
+    def test_decode_truncated_output(self) -> None:
+        # Valid magic + height + count=1 but zero output bytes
+        data = b"CBAS" + struct.pack(">Q", 1) + struct.pack(">H", 1)
+        with pytest.raises(ValueError, match="truncated"):
+            decode_coinbase_data(data)
+
+
+class TestBlockBodyMCDC:
+    def test_unpack_truncated_count(self) -> None:
+        with pytest.raises(ValueError, match="truncated"):
+            # 2 bytes, need 4
+            unpack_block_body(b"\x00\x01")
+
+
+class TestChunkingMCDC:
+    def test_rejects_zero_chunk_size(self) -> None:
+        with pytest.raises(ValueError, match="positive"):
+            chunk_block_body(b"data", max_chunk_size=0)
+
+    def test_rejects_negative_chunk_size(self) -> None:
+        with pytest.raises(ValueError, match="positive"):
+            chunk_block_body(b"data", max_chunk_size=-1)
