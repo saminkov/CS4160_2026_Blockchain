@@ -1,11 +1,9 @@
-"""Logging bootstrap: per-component loggers and ``[member h=height]`` prefix (A21)."""
-
 from __future__ import annotations
 
 import logging
 from typing import Final
 
-COMPONENTS: Final = ("core", "net", "chain", "miner", "sync", "reg")
+COMPONENTS: Final = ("core", "net", "chain", "miner", "sync", "reg", "crypto")
 
 _UNSUPPORTED_CURVE_PHRASES: Final = (
     "unsupported curve",

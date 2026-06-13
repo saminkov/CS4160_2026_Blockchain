@@ -5,7 +5,7 @@ import struct
 from collections.abc import Callable
 
 _NONCE = struct.Struct(">Q")
-_ABORT_CHECK_INTERVAL = 4096
+_DEFAULT_ABORT_CHECK_INTERVAL = 4096
 _MINING_PREFIX_SIZE = 76
 _HASH_SIZE = 32
 
@@ -24,18 +24,21 @@ def search_nonce(
     prefix76: bytes,
     difficulty: int,
     should_abort: Callable[[], bool],
+    check_interval: int = _DEFAULT_ABORT_CHECK_INTERVAL,
 ) -> int | None:
     if len(prefix76) != _MINING_PREFIX_SIZE:
         raise ValueError(f"prefix must be {_MINING_PREFIX_SIZE} bytes, got {len(prefix76)}")
     if difficulty < 0 or difficulty > 256:
         raise ValueError("difficulty must be in [0, 256]")
+    if check_interval < 1:
+        raise ValueError("check_interval must be >= 1")
 
     buf = bytearray(prefix76 + b"\x00" * 8)
     nonce_offset = _MINING_PREFIX_SIZE
     nonce = 0
 
     while True:
-        if nonce % _ABORT_CHECK_INTERVAL == 0 and should_abort():
+        if nonce % check_interval == 0 and should_abort():
             return None
         _NONCE.pack_into(buf, nonce_offset, nonce)
         digest = hashlib.sha256(buf).digest()

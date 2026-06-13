@@ -65,3 +65,22 @@ class TestSearchNonceMCDC:
     def test_rejects_difficulty_above_256(self) -> None:
         with pytest.raises(ValueError, match="difficulty"):
             search_nonce(b"\x00" * 76, difficulty=257, should_abort=lambda: False)
+
+
+class TestSearchNonceCheckInterval:
+    def test_rejects_check_interval_below_one(self) -> None:
+        with pytest.raises(ValueError, match="check_interval"):
+            search_nonce(b"\x00" * 76, difficulty=1, should_abort=lambda: False, check_interval=0)
+
+    def test_abort_honoured_at_configured_cadence(self) -> None:
+        # With check_interval=1, should_abort runs every nonce; abort on the 3rd call.
+        calls = {"n": 0}
+
+        def abort() -> bool:
+            calls["n"] += 1
+            return calls["n"] >= 3
+
+        # High difficulty so it never finds a nonce before aborting.
+        nonce = search_nonce(b"\x05" * 76, difficulty=64, should_abort=abort, check_interval=1)
+        assert nonce is None
+        assert calls["n"] == 3

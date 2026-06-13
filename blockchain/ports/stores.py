@@ -40,8 +40,13 @@ class BlockStorePort(Protocol):
         """Record ``block_hash`` as the main-chain block at ``height``."""
         ...
 
-    def ancestors(self, block_hash: bytes) -> list[BlockNode]:
-        """Return the chain of nodes from ``block_hash`` back toward genesis."""
+    def ancestors(self, block_hash: bytes, max_depth: int | None = None) -> list[BlockNode]:
+        """Return nodes from ``block_hash`` toward genesis, inclusive and node-first.
+
+        The queried node is first, then its parent, and so on until genesis (the walk
+        stops when a ``parent_hash`` is unknown). ``max_depth`` caps the number of nodes
+        returned; ``None`` walks all the way to genesis.
+        """
         ...
 
     def add_orphan(self, node: BlockNode) -> None:
