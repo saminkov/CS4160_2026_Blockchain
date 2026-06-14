@@ -34,6 +34,19 @@ class InMemoryBlockStore(BlockStorePort):
         if self._tip is None or height >= self._tip.height:
             self._tip = self._nodes.get(block_hash)
 
+    def remove_main_from(self, height: int) -> None:
+        for main_height in list(self._main):
+            if main_height >= height:
+                del self._main[main_height]
+        self._refresh_tip()
+
+    def _refresh_tip(self) -> None:
+        if not self._main:
+            self._tip = None
+            return
+        tip_height = max(self._main)
+        self._tip = self._nodes.get(self._main[tip_height])
+
     def ancestors(self, block_hash: bytes, max_depth: int | None = None) -> list[BlockNode]:
         chain: list[BlockNode] = []
         current = self._nodes.get(block_hash)
