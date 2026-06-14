@@ -27,8 +27,15 @@ from blockchain.adapters.payloads import (
     RegisterResponsePayload,
     SubmitTransactionPayload,
     TxGossipPayload,
+    block_data_not_found,
+    block_data_payloads_from_block,
 )
-from blockchain.core.consensus_params import REGISTRATION_COMMUNITY_ID, ConsensusParams, load_server_pubkey
+from blockchain.core.consensus_params import (
+    REGISTRATION_COMMUNITY_ID,
+    ConsensusParams,
+    load_server_pubkey,
+)
+from blockchain.core.entities import Block, Transaction
 from blockchain.logging_setup import WarnUnsupportedCurveFilter, get_logger
 from blockchain.ports.network import Handler, NetworkPort, RegistrationPort
 
@@ -165,6 +172,31 @@ class BlockchainCommunity(_PeerAwareCommunity):
                 continue
             self.send(member, payload)
 
+    def gossip_tx(self, tx: Transaction) -> None:
+        payload = TxGossipPayload(
+            sender_key=tx.sender_key,
+            data=tx.data,
+            timestamp=tx.timestamp,
+            signature=tx.signature,
+        )
+        self.broadcast_members(payload)
+
+    def announce_block(self, block_hash: bytes, height: int) -> None:
+        self.broadcast_members(BlockInvPayload(block_hash=block_hash, height=height))
+
+    def request_block_data(self, peer: bytes, block_hash: bytes) -> None:
+        self.send(peer, GetBlockDataPayload(block_hash=block_hash))
+
+    def send_block(self, peer: bytes, block: Block, height: int) -> None:
+        for payload in block_data_payloads_from_block(block, height):
+            self.send(peer, payload)
+
+    def send_block_not_found(self, peer: bytes, height: int) -> None:
+        self.send(peer, block_data_not_found(height))
+
+    def request_block_by_height(self, peer: bytes, height: int) -> None:
+        self.send(peer, GetBlockByHeightPayload(height=height))
+
     def register_handler(self, payload_cls: type, handler: Handler) -> None:
         @lazy_wrapper(payload_cls)
         def _dispatch(community_self: BlockchainCommunity, peer: Peer, payload: Any) -> None:
@@ -175,7 +207,9 @@ class BlockchainCommunity(_PeerAwareCommunity):
                 server_pubkey=community_self._server_pubkey,
                 member_pubkeys=community_self._member_pubkeys,
             ):
-                _log.debug("dropped unauthorized %s from %s", payload_cls.__name__, sender[:8].hex())
+                _log.debug(
+                    "dropped unauthorized %s from %s", payload_cls.__name__, sender[:8].hex()
+                )
                 return
             try:
                 handler(sender, payload)
@@ -220,7 +254,9 @@ class RegistrationCommunity(_PeerAwareCommunity):
                 sender,
                 server_pubkey=community_self._server_pubkey,
             ):
-                _log.debug("dropped unauthorized %s from %s", payload_cls.__name__, sender[:8].hex())
+                _log.debug(
+                    "dropped unauthorized %s from %s", payload_cls.__name__, sender[:8].hex()
+                )
                 return
             try:
                 handler(sender, payload)

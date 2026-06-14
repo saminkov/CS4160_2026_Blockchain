@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 
 from blockchain.core.consensus_params import (
+    REGISTRATION_COMMUNITY_ID,
+    SERVER_PUBKEY_HEX,
     ConsensusParams,
     community_id_from_group_id,
     load_group_id,
     load_member_pubkeys,
-    REGISTRATION_COMMUNITY_ID,
-    community_id_from_group_id,
     load_server_pubkey,
 )
 from blockchain.core.entities import HASH_SIZE
@@ -53,12 +52,9 @@ class TestGroupRegistration:
         params = ConsensusParams.default()
         assert params.member_pubkeys == load_member_pubkeys()
 
-    @pytest.mark.skipif(
-        not Path("keys/server_key.pem.pub").exists(),
-        reason="local server public key required",
-    )
-    def test_server_pubkey_loaded_from_key_file(self) -> None:
+    def test_server_pubkey_from_spec_constant(self) -> None:
         pubkey = load_server_pubkey()
+        assert pubkey == bytes.fromhex(SERVER_PUBKEY_HEX)
         assert pubkey.startswith(b"LibNaCLPK:")
 
     def test_registration_community_id_is_fixed(self) -> None:

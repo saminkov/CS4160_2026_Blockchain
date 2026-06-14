@@ -10,11 +10,11 @@ from pathlib import Path
 from blockchain.core.codec import CoinbaseData, CoinbaseOutput, encode_coinbase_data
 from blockchain.core.entities import (
     HASH_SIZE,
+    UTXO,
     Block,
     BlockHeader,
     Outpoint,
     Transaction,
-    UTXO,
 )
 from blockchain.core.hashing import block_hash, tx_hash, txs_hash
 
@@ -35,6 +35,15 @@ GENESIS_HEADLINE = (
 )
 GENESIS_COINBASE_SIGNATURE = b"GENESIS"
 
+# Lab 3 server public key (key_to_bin / LibNaCLPK), published in the ledger spec §2.1.
+# Trusted as the sole sender of server-originated messages. Held as a constant rather
+# than a key file so the trust anchor travels with the code.
+SERVER_PUBKEY_HEX = (
+    "4c69624e61434c504b3ae3fc099fb56ca3b5e1de9a1c843387f2acdbb78b1bd43"
+    "50ffde518068a0d246344b10d0d8c355fd0d76873e7d7f7838f3715e025af08f7"
+    "91324495e083331ce6"
+)
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _KEYS_DIR = _REPO_ROOT / "keys"
 _MEMBER_PUBKEY_FILES = (
@@ -43,7 +52,6 @@ _MEMBER_PUBKEY_FILES = (
     _KEYS_DIR / "polly_key.pem.pub",
 )
 _GROUP_REGISTRATION_FILE = _KEYS_DIR / "group_registration.json"
-_SERVER_PUBKEY_FILE = _KEYS_DIR / "server_key.pem.pub"
 
 
 @lru_cache(maxsize=1)
@@ -65,7 +73,7 @@ def load_member_pubkeys() -> tuple[bytes, ...]:
 
 @lru_cache(maxsize=1)
 def load_server_pubkey() -> bytes:
-    pubkey = _SERVER_PUBKEY_FILE.read_bytes()
+    pubkey = bytes.fromhex(SERVER_PUBKEY_HEX)
     if not pubkey:
         raise ValueError("server public key must be non-empty")
     return pubkey

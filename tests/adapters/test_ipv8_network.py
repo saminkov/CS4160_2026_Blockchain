@@ -20,6 +20,7 @@ from blockchain.adapters.payloads import (
 )
 from blockchain.core.consensus_params import (
     REGISTRATION_COMMUNITY_ID,
+    SERVER_PUBKEY_HEX,
     ConsensusParams,
     community_id_from_group_id,
     load_server_pubkey,
@@ -99,10 +100,7 @@ def test_load_my_pubkey_from_key_file() -> None:
     assert pubkey in ConsensusParams.default().member_pubkeys
 
 
-@pytest.mark.skipif(
-    not Path("keys/server_key.pem.pub").exists(),
-    reason="local server public key required",
-)
-def test_load_server_pubkey_from_key_file() -> None:
+def test_load_server_pubkey_from_spec_constant() -> None:
     pubkey = load_server_pubkey()
+    assert pubkey == bytes.fromhex(SERVER_PUBKEY_HEX)
     assert pubkey.startswith(b"LibNaCLPK:")
