@@ -28,7 +28,12 @@ from blockchain.adapters.payloads import (
     SubmitTransactionPayload,
     TxGossipPayload,
 )
-from blockchain.core.consensus_params import REGISTRATION_COMMUNITY_ID, ConsensusParams, load_server_pubkey
+from blockchain.core.consensus_params import (
+    REGISTRATION_COMMUNITY_ID,
+    ConsensusParams,
+    load_server_pubkey,
+)
+from blockchain.core.entities import Transaction
 from blockchain.logging_setup import WarnUnsupportedCurveFilter, get_logger
 from blockchain.ports.network import Handler, NetworkPort, RegistrationPort
 
@@ -164,6 +169,15 @@ class BlockchainCommunity(_PeerAwareCommunity):
             if member == self._my_pubkey:
                 continue
             self.send(member, payload)
+
+    def gossip_tx(self, tx: Transaction) -> None:
+        payload = TxGossipPayload(
+            sender_key=tx.sender_key,
+            data=tx.data,
+            timestamp=tx.timestamp,
+            signature=tx.signature,
+        )
+        self.broadcast_members(payload)
 
     def register_handler(self, payload_cls: type, handler: Handler) -> None:
         @lazy_wrapper(payload_cls)

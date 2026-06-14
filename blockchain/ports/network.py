@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Protocol
 
+from blockchain.core.entities import Transaction
+
 # Handler invoked with (sender_public_key, decoded_payload).
 Handler = Callable[[bytes, Any], None]
 
@@ -16,6 +18,10 @@ class NetworkPort(Protocol):
 
     def broadcast_members(self, payload: Any) -> None:
         """Send a payload to every known group member."""
+        ...
+
+    def gossip_tx(self, tx: Transaction) -> None:
+        """Broadcast a transaction to every known group member as ``TxGossip``."""
         ...
 
     def register_handler(self, payload_cls: type, handler: Handler) -> None:
