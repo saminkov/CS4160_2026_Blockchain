@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-import pytest
 from dataclasses import replace
+from pathlib import Path
+
+import pytest
 
 from blockchain.core.consensus_params import (
     ConsensusParams,
     community_id_from_group_id,
     load_group_id,
     load_member_pubkeys,
+    REGISTRATION_COMMUNITY_ID,
+    community_id_from_group_id,
+    load_server_pubkey,
 )
 from blockchain.core.entities import HASH_SIZE
 from blockchain.core.hashing import block_hash, tx_hash, txs_hash
@@ -47,6 +52,17 @@ class TestGroupRegistration:
     def test_member_pubkeys_loaded_from_key_files(self) -> None:
         params = ConsensusParams.default()
         assert params.member_pubkeys == load_member_pubkeys()
+
+    @pytest.mark.skipif(
+        not Path("keys/server_key.pem.pub").exists(),
+        reason="local server public key required",
+    )
+    def test_server_pubkey_loaded_from_key_file(self) -> None:
+        pubkey = load_server_pubkey()
+        assert pubkey.startswith(b"LibNaCLPK:")
+
+    def test_registration_community_id_is_fixed(self) -> None:
+        assert REGISTRATION_COMMUNITY_ID == b"Lab3Blockchain2026PW"
 
 
 class TestParamsHash:
