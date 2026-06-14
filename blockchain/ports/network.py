@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Protocol
 
-from blockchain.core.entities import Transaction
+from blockchain.core.entities import Block, Transaction
 
 # Handler invoked with (sender_public_key, decoded_payload).
 Handler = Callable[[bytes, Any], None]
@@ -22,6 +22,26 @@ class NetworkPort(Protocol):
 
     def gossip_tx(self, tx: Transaction) -> None:
         """Broadcast a transaction to every known group member as ``TxGossip``."""
+        ...
+
+    def announce_block(self, block_hash: bytes, height: int) -> None:
+        """Announce a block to every member as ``BlockInv``(id only)."""
+        ...
+
+    def request_block_data(self, peer: bytes, block_hash: bytes) -> None:
+        """Pull a block from ``peer`` by hash via ``GetBlockData``."""
+        ...
+
+    def send_block(self, peer: bytes, block: Block, height: int) -> None:
+        """Deliver a full block to ``peer`` as (chunked) ``BlockData``."""
+        ...
+
+    def send_block_not_found(self, peer: bytes, height: int) -> None:
+        """Reply to ``peer`` with the not-found ``BlockData`` sentinel."""
+        ...
+
+    def request_block_by_height(self, peer: bytes, height: int) -> None:
+        """Pull a block from ``peer`` by height via ``GetBlockByHeight``."""
         ...
 
     def register_handler(self, payload_cls: type, handler: Handler) -> None:
