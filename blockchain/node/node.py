@@ -103,7 +103,9 @@ class Node:
             self._miner,
             network,
             self._clock,
+            self._crypto,
             cfg.pubkey,
+            cfg.privkey,
         )
         tip_holder.set(self._mining.on_tip_changed)
 
