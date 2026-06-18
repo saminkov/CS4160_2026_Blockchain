@@ -12,6 +12,16 @@ from ipv8.keyvault.crypto import default_eccrypto
 from blockchain.core.consensus_params import ConsensusParams, community_id_from_group_id
 
 
+def parse_peer_address(value: str) -> tuple[str, int]:
+    host, separator, port_text = value.rpartition(":")
+    if not separator or not port_text.isdigit():
+        raise ValueError(f"peer address must be host:port, got {value!r}")
+    port = int(port_text)
+    if port <= 0 or port > 65535:
+        raise ValueError(f"peer port out of range: {port}")
+    return host, port
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class NodeConfig:
     params: ConsensusParams
@@ -22,6 +32,7 @@ class NodeConfig:
     is_registrar: bool
     log_level: str
     port: int
+    peers: tuple[tuple[str, int], ...]
 
 
 def load_config(argv: list[str] | None = None) -> NodeConfig:
@@ -39,6 +50,13 @@ def load_config(argv: list[str] | None = None) -> NodeConfig:
     parser.add_argument("--difficulty", type=int, help="Override difficulty bits")
     parser.add_argument("--log-level", help="Logging level (default: INFO)")
     parser.add_argument("--port", type=int, help="UDP port to bind for IPv8")
+    parser.add_argument(
+        "--peer",
+        action="append",
+        default=[],
+        metavar="HOST:PORT",
+        help="Static peer to walk to (repeatable; also [node] peers in config)",
+    )
     parser.add_argument("--group-id", help="Override group ID")
     parser.add_argument("--community-id", help="Override community ID (hex)")
 
@@ -116,6 +134,10 @@ def load_config(argv: list[str] | None = None) -> NodeConfig:
     # Port
     port = args.port if args.port is not None else node_cfg.get("port", 8090)
 
+    peer_values = list(args.peer or ())
+    peer_values.extend(node_cfg.get("peers", ()))
+    peers = tuple(parse_peer_address(value) for value in peer_values)
+
     return NodeConfig(
         params=params,
         privkey=privkey_bytes,
@@ -125,4 +147,5 @@ def load_config(argv: list[str] | None = None) -> NodeConfig:
         is_registrar=bool(is_registrar),
         log_level=log_level,
         port=int(port),
+        peers=peers,
     )

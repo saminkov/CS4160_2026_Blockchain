@@ -5,7 +5,11 @@ import logging
 
 from blockchain.adapters.block_store import InMemoryBlockStore
 from blockchain.adapters.ecc_crypto import ECCryptoAdapter
-from blockchain.adapters.ipv8_network import IPv8NetworkBundle, build_ipv8
+from blockchain.adapters.ipv8_network import (
+    IPv8NetworkBundle,
+    build_ipv8,
+    connect_to_peers,
+)
 from blockchain.adapters.mempool import InMemoryMempool
 from blockchain.adapters.process_miner import ProcessMiner
 from blockchain.adapters.system_clock import SystemClock
@@ -79,6 +83,13 @@ class Node:
 
         # 2. Start IPv8
         self._bundle = await build_ipv8(cfg.key_path, cfg.params, port=cfg.port)
+        if cfg.peers:
+            connect_to_peers(self._bundle, cfg.peers)
+        elif len(cfg.params.member_pubkeys) > 1:
+            logger.warning(
+                "no --peer addresses configured; other members must be reachable "
+                "via host:port (required when running on separate machines)"
+            )
         network = self._bundle.network
         registration_port = self._bundle.registration
 
@@ -158,11 +169,14 @@ class Node:
         height = self._chain.height()
         set_logging_height(height)
         mempool_size = len(self._mempool)
+        expected_peers = len(self._config.params.member_pubkeys) - 1
         online = len(self._bundle.network.members_online())
         logger.info(
             "status — height=%d mempool=%d peers=%d/%d",
             height,
             mempool_size,
             online,
-            len(self._config.params.member_pubkeys) - 1,
+            expected_peers,
         )
+        if online < expected_peers and self._config.peers:
+            connect_to_peers(self._bundle, self._config.peers)

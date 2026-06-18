@@ -140,6 +140,7 @@ class BlockchainCommunity(_PeerAwareCommunity):
         self._server_pubkey = b""
         self._member_pubkeys: frozenset[bytes] = frozenset()
         self._my_pubkey = b""
+        self._offline_logged: set[bytes] = set()
 
     def bind_network(
         self,
@@ -155,8 +156,13 @@ class BlockchainCommunity(_PeerAwareCommunity):
     def send(self, peer: bytes, payload: VariablePayload) -> None:
         resolved = self._peer_for_pubkey(peer)
         if resolved is None:
-            _log.warning("dropped send: peer %s not online", peer[:8].hex())
+            if peer not in self._offline_logged:
+                self._offline_logged.add(peer)
+                _log.warning("peer %s not online yet", peer[:8].hex())
+            else:
+                _log.debug("dropped send: peer %s not online", peer[:8].hex())
             return
+        self._offline_logged.discard(peer)
         self.ez_send(resolved, payload)
 
     def broadcast_members(self, payload: VariablePayload) -> None:
@@ -290,6 +296,15 @@ class IPv8NetworkBundle:
 
     async def stop(self) -> None:
         await self.ipv8.stop()
+
+
+def connect_to_peers(bundle: IPv8NetworkBundle, peers: tuple[tuple[str, int], ...]) -> None:
+    """Walk both overlays to configured member host:port addresses."""
+    for host, port in peers:
+        address = (host, port)
+        bundle.blockchain_overlay.walk_to(address)
+        bundle.registration_overlay.walk_to(address)
+        _log.info("walking to peer at %s:%d", host, port)
 
 
 async def build_ipv8(
