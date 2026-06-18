@@ -188,8 +188,26 @@ class BlockchainCommunity(_PeerAwareCommunity):
         online = {peer.public_key.key_to_bin() for peer in self.get_peers()}
         return online & self._member_pubkeys
 
-    def register_task(self, name: str, fn: Callable[[], Any], interval: float) -> None:
-        super().register_task(name, fn, interval=interval, delay=interval)
+    def register_task(  # type: ignore[override]
+        self,
+        name: str,
+        fn: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        # Distinguish our NetworkPort API from internal IPv8 calls:
+        #   Our callers:  register_task(name, fn, interval_float)
+        #                 → args=(float,), no interval/delay in kwargs
+        #   IPv8 internal: passes kwargs delay=/interval= and/or non-numeric positional task args
+        if (
+            len(args) == 1
+            and isinstance(args[0], (int, float))
+            and "interval" not in kwargs
+            and "delay" not in kwargs
+        ):
+            interval = float(args[0])
+            return super().register_task(name, fn, interval=interval, delay=interval)
+        return super().register_task(name, fn, *args, **kwargs)
 
 
 class RegistrationCommunity(_PeerAwareCommunity):
@@ -274,7 +292,12 @@ class IPv8NetworkBundle:
         await self.ipv8.stop()
 
 
-async def build_ipv8(key_path: str | Path, params: ConsensusParams) -> IPv8NetworkBundle:
+async def build_ipv8(
+    key_path: str | Path,
+    params: ConsensusParams,
+    *,
+    port: int = 8090,
+) -> IPv8NetworkBundle:
     """Start one IPv8 instance with blockchain + registration overlays on a shared key."""
     key_path = str(key_path)
     my_pubkey = load_my_pubkey(key_path)
@@ -297,8 +320,13 @@ async def build_ipv8(key_path: str | Path, params: ConsensusParams) -> IPv8Netwo
             [("started",)],
         )
 
+    config = builder.finalize()
+    for key_cfg in config.get("keys", []):
+        for iface in key_cfg.get("interfaces", []):
+            iface["port"] = port
+
     ipv8 = IPv8(
-        builder.finalize(),
+        config,
         extra_communities={
             blockchain_name: blockchain_cls,
             registration_name: registration_cls,

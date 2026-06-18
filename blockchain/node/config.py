@@ -17,6 +17,7 @@ class NodeConfig:
     params: ConsensusParams
     privkey: bytes
     pubkey: bytes
+    key_path: str
     member_index: int | None
     is_registrar: bool
     log_level: str
@@ -119,6 +120,7 @@ def load_config(argv: list[str] | None = None) -> NodeConfig:
         params=params,
         privkey=privkey_bytes,
         pubkey=pubkey_bytes,
+        key_path=str(key_path),
         member_index=member_index,
         is_registrar=bool(is_registrar),
         log_level=log_level,
