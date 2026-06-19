@@ -29,7 +29,11 @@ from blockchain.adapters.payloads import (
     TxGossipPayload,
 )
 from blockchain.core.consensus_params import REGISTRATION_COMMUNITY_ID, ConsensusParams, load_server_pubkey
-from blockchain.logging_setup import WarnUnsupportedCurveFilter, get_logger
+from blockchain.logging_setup import (
+    ForeignCurveNoiseFilter,
+    WarnUnsupportedCurveFilter,
+    get_logger,
+)
 from blockchain.ports.network import Handler, NetworkPort, RegistrationPort
 
 _POLL_INTERVAL: Final = 2.0
@@ -357,6 +361,12 @@ async def build_ipv8(
         my_pubkey=my_pubkey,
     )
     registration.bind_registration(server_pubkey=server_pubkey)
+
+    # IPv8 logs a full traceback per packet from public bootstrap peers on
+    # secp256k1 (a curve our key vault can't read). Collapse those to one line.
+    curve_noise_filter = ForeignCurveNoiseFilter()
+    for community_name in (blockchain_name, registration_name):
+        logging.getLogger(community_name).addFilter(curve_noise_filter)
 
     logging.getLogger("ipv8").addFilter(WarnUnsupportedCurveFilter())
 

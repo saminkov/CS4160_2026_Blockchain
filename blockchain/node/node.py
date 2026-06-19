@@ -116,6 +116,7 @@ class Node:
             cfg.params,
             self._chain,
             self._mempool,
+            self._utxo_store,
             self._miner,
             network,
             self._clock,

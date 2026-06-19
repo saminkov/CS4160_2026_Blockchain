@@ -11,7 +11,16 @@ from blockchain.adapters.utxo_store import InMemoryUTXOStore
 from blockchain.app.chain_service import ChainService
 from blockchain.app.mining_service import MiningService
 from blockchain.app.validation_service import ValidationService
-from blockchain.core.codec import CoinbaseData, CoinbaseOutput, encode_coinbase_data
+from blockchain.core.codec import (
+    CoinbaseData,
+    CoinbaseOutput,
+    TransferData,
+    TransferInput,
+    TransferOutput,
+    decode_coinbase_data,
+    encode_coinbase_data,
+    encode_transfer_data,
+)
 from blockchain.core.consensus_params import ConsensusParams
 from blockchain.core.entities import Block, BlockHeader, Transaction
 from blockchain.core.hashing import header_mining_prefix, txs_hash
@@ -98,11 +107,28 @@ def _mine_block(prev_hash: bytes, height: int, *, timestamp: int) -> Block:
     return Block(header=dataclasses.replace(base, nonce=nonce), transactions=txs)
 
 
+def _fee_transfer(utxo: Any, *, fee: int, timestamp: int) -> Transaction:
+    """A transfer spending ``utxo`` that leaves ``fee`` as the input/output gap."""
+    data = encode_transfer_data(
+        TransferData(
+            inputs=(TransferInput(prev_txid=utxo.outpoint.txid, output_index=utxo.outpoint.index),),
+            outputs=(
+                TransferOutput(recipient_pubkey=utxo.recipient_pubkey, amount=utxo.amount - fee),
+            ),
+        )
+    )
+    return Transaction(
+        sender_key=utxo.recipient_pubkey, data=data, timestamp=timestamp, signature=b"sig"
+    )
+
+
 class _Harness:
     def __init__(self) -> None:
         self.miner = _FakeMiner()
         self.net = _FakeNetwork()
-        utxo = InMemoryUTXOStore()
+        self.utxo = InMemoryUTXOStore()
+        self.mempool = InMemoryMempool()
+        utxo = self.utxo
         forward: dict[str, Any] = {}
         self.chain = ChainService(
             _PARAMS,
@@ -116,7 +142,8 @@ class _Harness:
         self.mining = MiningService(
             _PARAMS,
             self.chain,
-            InMemoryMempool(),
+            self.mempool,
+            utxo,
             self.miner,
             self.net,
             FakeClock(_PARAMS.genesis_timestamp + 100),
@@ -140,6 +167,25 @@ class TestMiningService:
 
         assert len(h.miner.calls) == 2
         assert h.miner.calls[1]["generation"] == 2
+
+    def test_coinbase_pays_reward_plus_transfer_fees(self) -> None:
+        h = _Harness()
+        premine = _PARAMS.build_genesis().premine_utxos[0]
+        fee = 7
+        transfer = _fee_transfer(premine, fee=fee, timestamp=_PARAMS.genesis_timestamp + 150)
+        h.mempool.add(transfer, 0)
+
+        # Advance the tip so a fresh candidate selects the fee-bearing transfer.
+        block1 = _mine_block(
+            _PARAMS.build_genesis().block_hash, 1, timestamp=_PARAMS.genesis_timestamp + 100
+        )
+        assert h.chain.connect_block(block1, source="test").ok
+
+        candidate = h.mining._candidate
+        assert candidate is not None
+        assert transfer in candidate.transactions
+        coinbase = decode_coinbase_data(candidate.transactions[0].data)
+        assert sum(o.amount for o in coinbase.outputs) == _PARAMS.reward(2) + fee
 
     def test_stale_on_found_is_ignored(self) -> None:
         h = _Harness()

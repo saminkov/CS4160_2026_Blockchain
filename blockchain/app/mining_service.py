@@ -13,12 +13,12 @@ from blockchain.core.codec import (
 from blockchain.core.consensus_params import ConsensusParams
 from blockchain.core.entities import Block, BlockHeader, BlockNode, Transaction
 from blockchain.core.hashing import block_hash, header_mining_prefix, txs_hash
-from blockchain.core.validation import MAX_BLOCK_BYTES
+from blockchain.core.validation import MAX_BLOCK_BYTES, transfer_fee
 from blockchain.ports.clock import ClockPort
 from blockchain.ports.crypto import CryptoPort
 from blockchain.ports.miner import MinerPort
 from blockchain.ports.network import NetworkPort
-from blockchain.ports.stores import MempoolPort
+from blockchain.ports.stores import MempoolPort, UTXOStorePort
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ class MiningService:
         params: ConsensusParams,
         chain: object,  # ChainService — imported lazily to avoid circular import
         mempool: MempoolPort,
+        utxo: UTXOStorePort,
         miner: MinerPort,
         network: NetworkPort,
         clock: ClockPort,
@@ -41,6 +42,7 @@ class MiningService:
         self._params = params
         self._chain = chain
         self._mempool = mempool
+        self._utxo = utxo
         self._miner = miner
         self._network = network
         self._clock = clock
@@ -100,37 +102,53 @@ class MiningService:
             logger.info("found block h=%d hash=%s", height, digest.hex()[:12])
             self._network.broadcast_members(BlockInvPayload(digest, height))
 
-    def _build_candidate(self, tip: BlockNode) -> Block:
-        height = tip.height + 1
-        reward = self._params.reward(height)
+    def _make_coinbase(self, height: int, amount: int, timestamp: int) -> Transaction:
         coinbase_body = encode_coinbase_data(
             CoinbaseData(
                 height=height,
                 outputs=(
-                    CoinbaseOutput(
-                        recipient_pubkey=self._my_pubkey,
-                        amount=reward,
-                    ),
+                    CoinbaseOutput(recipient_pubkey=self._my_pubkey, amount=amount),
                 ),
             )
         )
-        timestamp = self._clock.now()
-        # Ensure timestamp is strictly greater than parent block's timestamp
-        if timestamp <= tip.block.header.timestamp:
-            timestamp = tip.block.header.timestamp + 1
-            
         msg = self._my_pubkey + coinbase_body + pack_timestamp_for_signing(timestamp)
         signature = self._crypto.sign(self._my_privkey, msg)
-
-        coinbase_tx = Transaction(
+        return Transaction(
             sender_key=self._my_pubkey,
             data=coinbase_body,
             timestamp=timestamp,
             signature=signature,
         )
-        coinbase_size = len(pack_tx(coinbase_tx))
+
+    def _build_candidate(self, tip: BlockNode) -> Block:
+        height = tip.height + 1
+        reward = self._params.reward(height)
+
+        timestamp = self._clock.now()
+        # Ensure timestamp is strictly greater than parent block's timestamp
+        if timestamp <= tip.block.header.timestamp:
+            timestamp = tip.block.header.timestamp + 1
+
+        # Size the coinbase against the reward-only output (its byte length barely
+        # moves with the fee amount) so we can budget the mempool selection.
+        coinbase_size = len(pack_tx(self._make_coinbase(height, reward, timestamp)))
         selected = self._mempool.select(MAX_BLOCK_BYTES - coinbase_size)
-        transactions: tuple[Transaction, ...] = (coinbase_tx, *selected)
+
+        # The coinbase must pay reward + total fees of the included transfers
+        # (validate_coinbase_value), so compute fees against the current UTXO view.
+        view = self._utxo.read_view()
+        fees = 0
+        kept: list[Transaction] = []
+        for tx in selected:
+            try:
+                fees += transfer_fee(tx, view)
+            except ValueError:
+                # Input already spent relative to the tip — exclude rather than wedge.
+                continue
+            kept.append(tx)
+
+        coinbase_tx = self._make_coinbase(height, reward + fees, timestamp)
+        transactions: tuple[Transaction, ...] = (coinbase_tx, *kept)
         header = BlockHeader(
             prev_hash=tip.block_hash,
             txs_hash=txs_hash(transactions),

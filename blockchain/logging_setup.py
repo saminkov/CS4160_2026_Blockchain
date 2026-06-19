@@ -20,6 +20,36 @@ class WarnUnsupportedCurveFilter(logging.Filter):
         return not any(phrase in message for phrase in _UNSUPPORTED_CURVE_PHRASES)
 
 
+_FOREIGN_CURVE_NEEDLES: Final = (
+    "1.3.132.0.1",  # secp256k1 OID used by public bootstrap peers
+    "is not supported",
+    "unsupported",
+    "could not deserialize key",
+)
+
+
+class ForeignCurveNoiseFilter(logging.Filter):
+    """Collapse IPv8 unsupported-curve packet tracebacks to a single short line.
+
+    IPv8 dials public bootstrap peers that use secp256k1 (curve OID 1.3.132.0.1),
+    which our curve25519 key vault cannot deserialize, so every foreign packet
+    triggers a full ``Exception occurred while handling packet!`` traceback on the
+    community logger. The curve detail lives in the traceback (not the message),
+    so we inspect the attached exception and, when it matches, keep one terse line
+    and discard the traceback.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        exc = record.exc_info[1] if record.exc_info else None
+        haystack = f"{record.getMessage()} {exc}".lower()
+        if any(needle in haystack for needle in _FOREIGN_CURVE_NEEDLES):
+            record.msg = "ignored packet from foreign-curve bootstrap peer (harmless)"
+            record.args = ()
+            record.exc_info = None
+            record.exc_text = None
+        return True
+
+
 class _LoggingState:
     member: str = "node"
     height: int = 0
