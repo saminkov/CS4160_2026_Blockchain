@@ -61,6 +61,14 @@ class BlockStorePort(Protocol):
         """Remove and return orphans whose parent is ``parent_hash``."""
         ...
 
+    def missing_orphan_parents(self) -> list[bytes]:
+        """Return parent hashes of buffered orphans that are not yet stored.
+
+        These are the still-missing links whose retrieval would let buffered branches
+        connect; used by the sync re-scan to re-ask peers until a branch links.
+        """
+        ...
+
 
 class UTXOView(Protocol):
     """Read-only snapshot of the UTXO set, safe to offload for validation."""

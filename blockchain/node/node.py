@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+from concurrent.futures import ProcessPoolExecutor
 
 from blockchain.adapters.block_store import InMemoryBlockStore
 from blockchain.adapters.ecc_crypto import ECCryptoAdapter
@@ -56,6 +58,7 @@ class Node:
         self._clock = SystemClock()
         self._crypto = ECCryptoAdapter()
         self._miner = ProcessMiner()
+        self._pool = ProcessPoolExecutor()  # stateless Phase-A validation offload
 
         # Filled in start()
         self._bundle: IPv8NetworkBundle | None = None
@@ -94,7 +97,9 @@ class Node:
         registration_port = self._bundle.registration
 
         # 3. Build services (order matters: ChainService before Mining)
-        validation = ValidationService(cfg.params, None, self._utxo_store, self._crypto)
+        validation = ValidationService(
+            cfg.params, self._pool, self._utxo_store, self._crypto
+        )
 
         tip_holder = _TipCallbackHolder()
         self._chain = ChainService(
@@ -120,7 +125,9 @@ class Node:
         )
         tip_holder.set(self._mining.on_tip_changed)
 
-        MempoolService(self._mempool, network, self._crypto, cfg.params)
+        MempoolService(
+            self._mempool, network, self._crypto, cfg.params, self._utxo_store, self._chain
+        )
         SyncService(self._chain, network, cfg.params)
         RegistrationService(cfg.params, network, registration_port, cfg.is_registrar)
 
@@ -141,13 +148,13 @@ class Node:
 
         if self._status_task is not None:
             self._status_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._status_task
-            except asyncio.CancelledError:
-                pass
 
         if self._mining is not None:
             self._mining.shutdown()
+
+        self._pool.shutdown(wait=False, cancel_futures=True)
 
         if self._bundle is not None:
             await self._bundle.stop()

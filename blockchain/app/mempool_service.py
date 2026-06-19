@@ -11,10 +11,12 @@ from blockchain.adapters.payloads import (
     transaction_from_submit,
 )
 from blockchain.core.consensus_params import ConsensusParams
+from blockchain.core.entities import Result, Transaction
 from blockchain.core.hashing import tx_hash
+from blockchain.core.validation import TxClass, classify_tx, validate_transfer_tx
 from blockchain.ports.crypto import CryptoPort
 from blockchain.ports.network import NetworkPort
-from blockchain.ports.stores import MempoolPort
+from blockchain.ports.stores import MempoolPort, UTXOStorePort
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +32,15 @@ class MempoolService:
         network: NetworkPort,
         crypto: CryptoPort,
         params: ConsensusParams,
+        utxo: UTXOStorePort,
+        chain: object,  # ChainService — duck-typed for height(), avoids circular import
     ) -> None:
         self._mempool = mempool
         self._network = network
         self._crypto = crypto
         self._params = params
+        self._utxo = utxo
+        self._chain = chain
 
         network.register_handler(SubmitTransactionPayload, self._on_submit)
         network.register_handler(TxGossipPayload, self._on_gossip)
@@ -57,6 +63,14 @@ class MempoolService:
 
         already_known = self._mempool.contains(digest)
         if not already_known:
+            check = self._passes_utxo_check(tx)
+            if not check.ok:
+                logger.warning("rejected tx %s: %s", digest.hex()[:12], check.reason)
+                self._network.send(
+                    peer,
+                    SubmitTransactionResponsePayload(False, digest, check.reason),
+                )
+                return
             self._mempool.add(tx, _TX_FEE)
             logger.info("accepted tx %s from server", digest.hex()[:12])
 
@@ -73,6 +87,10 @@ class MempoolService:
             return
         if not self._verify_sig(tx):
             logger.debug("dropped gossip tx %s: bad signature", digest.hex()[:12])
+            return
+        check = self._passes_utxo_check(tx)
+        if not check.ok:
+            logger.debug("dropped gossip tx %s: %s", digest.hex()[:12], check.reason)
             return
 
         self._mempool.add(tx, _TX_FEE)
@@ -92,8 +110,18 @@ class MempoolService:
     # Internal
     # ------------------------------------------------------------------
 
-    def _verify_sig(self, tx: object) -> bool:  # type: ignore[override]
-        from blockchain.core.entities import Transaction
-        assert isinstance(tx, Transaction)
+    def _passes_utxo_check(self, tx: Transaction) -> Result:
+        """Reject transfers that spend a missing/already-spent UTXO (Task 18 / §8).
+
+        Coinbase and data-carrier transactions carry no spendable inputs, so they
+        skip the check and are accepted as fee-0 entries.
+        """
+        if classify_tx(tx) != TxClass.TRANSFER:
+            return Result(True, "")
+        view = self._utxo.read_view()
+        next_height = self._chain.height() + 1  # type: ignore[attr-defined]
+        return validate_transfer_tx(tx, next_height, self._params, view, spent_in_block=set())
+
+    def _verify_sig(self, tx: Transaction) -> bool:
         msg = tx.sender_key + tx.data + struct.pack(">Q", tx.timestamp)
         return self._crypto.verify(tx.sender_key, msg, tx.signature)

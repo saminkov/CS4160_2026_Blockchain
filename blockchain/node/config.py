@@ -125,8 +125,18 @@ def load_config(argv: list[str] | None = None) -> NodeConfig:
             member_index = i
             break
 
-    # Registrar
-    is_registrar = args.registrar or node_cfg.get("registrar", False)
+    if member_index is None:
+        raise ValueError(
+            f"node key {key_path} is not in the member roster; "
+            "it cannot participate as a recognized group member"
+        )
+
+    # Registrar: explicit flag/config wins; otherwise the lexicographically-first
+    # member key is the designated registrar (deterministic across nodes, §13).
+    explicit_registrar = args.registrar or node_cfg.get("registrar", False)
+    is_registrar = bool(explicit_registrar) or (
+        pubkey_bytes == min(params.member_pubkeys)
+    )
 
     # Log level
     log_level = args.log_level or node_cfg.get("log_level", "INFO")

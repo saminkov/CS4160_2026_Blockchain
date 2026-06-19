@@ -6,7 +6,6 @@ from collections import defaultdict
 from blockchain.adapters.payloads import (
     BlockDataPayload,
     BlockInvPayload,
-    BlockResponsePayload,
     ChainHeightResponsePayload,
     GetBlockByHeightPayload,
     GetBlockDataPayload,
@@ -19,7 +18,6 @@ from blockchain.adapters.payloads import (
     block_response_not_found,
     is_block_data_not_found,
 )
-from blockchain.core.hashing import block_hash
 from blockchain.ports.network import NetworkPort
 
 logger = logging.getLogger(__name__)
@@ -106,7 +104,12 @@ class SyncService:
             logger.warning("bad block data from %s: %s", peer.hex()[:8], exc)
             return
         result = self._chain.connect_block(block, source=peer.hex()[:8])  # type: ignore[attr-defined]
-        if result.ok and result.reason not in ("already known", "orphan"):
+        if result.reason == "orphan":
+            # Walk the branch back: ask for the missing parent so the orphan can link.
+            # Each received ancestor re-triggers this until we reach a known block,
+            # at which point ChainService's cascade connects the whole branch.
+            self._request_block(block.header.prev_hash)
+        elif result.ok and result.reason != "already known":
             logger.info(
                 "connected block h=%d hash=%s from %s",
                 payload.height,
@@ -126,6 +129,11 @@ class SyncService:
     # Background gap-filling
     # ------------------------------------------------------------------
 
+    def _request_block(self, block_hash: bytes) -> None:
+        """Ask every online member for a block by hash (idempotent)."""
+        for member in self._network.members_online():
+            self._network.send(member, GetBlockDataPayload(block_hash))
+
     def _sync_loop(self) -> None:
         my_height = self._chain.height()  # type: ignore[attr-defined]
         online = self._network.members_online()
@@ -136,3 +144,7 @@ class SyncService:
                 continue
             for member in online:
                 self._network.send(member, GetBlockByHeightPayload(h))
+        # Re-ask peers for the missing parents of any buffered orphans, so a branch
+        # that started above our tip (e.g. after deep divergence) eventually links.
+        for parent_hash in self._chain._blocks.missing_orphan_parents():  # type: ignore[attr-defined]
+            self._request_block(parent_hash)

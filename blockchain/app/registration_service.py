@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import sys
 
 from blockchain.adapters.payloads import (
     ReadyPayload,
@@ -35,6 +34,7 @@ class RegistrationService:
         self._ready_peers: set[bytes] = set()
         self._registration_sent = False
         self._time_since_registration = 0.0
+        self._params_mismatch = False
 
         self._network.register_handler(ReadyPayload, self._on_ready)
         self._registration.register_handler(
@@ -59,21 +59,30 @@ class RegistrationService:
             return
 
         if payload.params_hash != self._params_hash:
+            self._params_mismatch = True
             logger.critical(
-                "Consensus params mismatch with peer %s. Fast-failing.",
+                "Consensus params mismatch with peer %s; refusing to register. "
+                "This node will stay online for diagnosis but will NOT join the group.",
                 peer.hex()[:8],
             )
-            sys.exit(1)
+            return
 
         if peer not in self._ready_peers:
             logger.info("Peer %s is ready", peer.hex()[:8])
             self._ready_peers.add(peer)
 
     def _registrar_loop(self) -> None:
+        if self._params_mismatch:
+            return
         if len(self._ready_peers) < 2:
             return
 
         if not self._registration_sent:
+            # Keep retrying every tick until the server is actually reachable, so a
+            # first send dropped because the server isn't online yet is retried in
+            # seconds rather than waiting a full SERVER_RETRY_INTERVAL.
+            if not self._registration.server_online():
+                return
             self._send_registration()
             self._registration_sent = True
             self._time_since_registration = 0.0

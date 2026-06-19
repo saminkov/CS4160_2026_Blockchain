@@ -62,3 +62,6 @@ class InMemoryBlockStore(BlockStorePort):
 
     def take_orphans(self, parent_hash: bytes) -> list[BlockNode]:
         return self._orphans.pop(parent_hash, [])
+
+    def missing_orphan_parents(self) -> list[bytes]:
+        return [parent_hash for parent_hash in self._orphans if parent_hash not in self._nodes]
